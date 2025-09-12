@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Backend Cold Start Monitor</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+    <!-- Main Container -->
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="text-center my-8">
+            <h1 class="text-4xl font-bold text-gray-900 tracking-tight">Backend Cold Start Monitor</h1>
+            <p class="mt-2 text-lg text-gray-600">
+                Enter your backend URL below to monitor its response time and detect cold starts.
+            </p>
+        </header>
+
+        <main class="bg-white rounded-xl shadow-lg p-6 md:p-8">
+            <!-- URL Input and Controls -->
+            <div class="flex flex-col md:flex-row items-center justify-center space-y-4 md:space-y-0 md:space-x-4 mb-8">
+                <input type="text" id="urlInput" class="flex-grow p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-300" placeholder="e.g., https://my-backend-api.com/status">
+                <input type="number" id="intervalInput" class="w-full md:w-1/4 p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-300" placeholder="Interval (s)" value="5">
+                <input type="number" id="durationInput" class="w-full md:w-1/4 p-3 rounded-lg border-2 border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition duration-300" placeholder="Duration (s)" value="120">
+                <button id="startBtn" class="w-full md:w-auto px-6 py-3 bg-blue-600 text-white font-semibold rounded-full shadow-lg hover:bg-blue-700 transition duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-300">
+                    Start Monitoring
+                </button>
+            </div>
+
+            <!-- Status Message -->
+            <div id="statusMessage" class="text-center text-sm text-gray-500 mb-4"></div>
+
+            <!-- Real-Time Chart Container -->
+            <div id="realtimeChartContainer" class="hidden mt-8">
+                <h2 class="text-2xl font-semibold mb-4 text-center">Real-Time Response Times</h2>
+                <div class="relative h-96">
+                    <canvas id="realtimeChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Cluster Analysis Section -->
+            <div class="text-center mt-8">
+                <button id="showClustersBtn" class="hidden w-full md:w-auto px-6 py-3 bg-blue-600 text-white font-semibold rounded-full shadow-lg hover:bg-blue-700 transition duration-300 transform hover:scale-105 focus:outline-none focus:ring-4 focus:ring-blue-300">
+                    Show Cluster Analysis
+                </button>
+            </div>
+
+            <!-- Cluster Chart Container -->
+            <div id="clusterChartContainer" class="hidden mt-8">
+                <h2 class="text-2xl font-semibold mb-4 text-center">Response Time Clusters with Centroids</h2>
+                <div class="relative h-96">
+                    <canvas id="clusterChart"></canvas>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal for Cold Start Alert -->
+    <div id="coldStartModal" class="hidden fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center p-4 z-50">
+        <div class="bg-white rounded-lg p-6 max-w-lg w-full shadow-xl">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-xl font-bold text-red-600">Anomaly Detected!</h3>
+                <button id="closeModalBtn" class="text-gray-500 hover:text-gray-800 transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <p id="modalMessage" class="text-gray-700"></p>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const urlInput = document.getElementById('urlInput');
+            const intervalInput = document.getElementById('intervalInput');
+            const durationInput = document.getElementById('durationInput');
+            const startBtn = document.getElementById('startBtn');
+            const statusMessage = document.getElementById('statusMessage');
+            const realtimeChartContainer = document.getElementById('realtimeChartContainer');
+            const clusterChartContainer = document.getElementById('clusterChartContainer');
+            const showClustersBtn = document.getElementById('showClustersBtn');
+            const coldStartModal = document.getElementById('coldStartModal');
+            const closeModalBtn = document.getElementById('closeModalBtn');
+            const modalMessage = document.getElementById('modalMessage');
+
+            let realtimeChart;
+            let clusterChart;
+            let pingInterval;
+            let pingDurationTimeout;
+            let collectedData = [];
+            const MAX_POINTS = 50;
+            let isMonitoring = false;
+            let centroids = [];
+            let DURATION = 120; // Default duration to collect data in seconds
+
+            const clusterColors = {
+                "Fast": 'rgba(34, 197, 94, 0.8)', // green-500
+                "Medium": 'rgba(251, 191, 36, 0.8)', // yellow-400
+                "Slow": 'rgba(239, 68, 68, 0.8)' // red-500
+            };
+
+            const pointBackgroundColors = {
+                "Fast": 'rgba(34, 197, 94, 1)',
+                "Medium": 'rgba(251, 191, 36, 1)',
+                "Slow": 'rgba(239, 68, 68, 1)'
+            };
+
+            // Initialize the real-time chart
+            function initRealtimeChart() {
+                const ctx = document.getElementById('realtimeChart').getContext('2d');
+                realtimeChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Real-Time Response Times',
+                            data: [],
+                            borderColor: 'rgba(59, 130, 246, 1)',
+                            backgroundColor: 'rgba(59, 130, 246, 0.2)',
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            tension: 0.4,
+                            fill: true,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                title: { display: true, text: 'Response Time (ms)' },
+                                beginAtZero: true
+                            },
+                            x: {
+                                title: { display: true, text: 'Ping Count' }
+                            }
+                        },
+                        plugins: {
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => `Time: ${context.raw.toFixed(2)}ms`
+                                }
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Function to update the real-time chart
+            function updateRealtimeChart(data) {
+                if (realtimeChart.data.datasets[0].data.length >= MAX_POINTS) {
+                    realtimeChart.data.labels.shift();
+                    realtimeChart.data.datasets[0].data.shift();
+                }
+                const pingCount = collectedData.length;
+                realtimeChart.data.labels.push(`Ping #${pingCount}`);
+                realtimeChart.data.datasets[0].data.push(data.response_time);
+                realtimeChart.update();
+            }
+
+            // Initialize and show the cluster chart
+            function initClusterChart() {
+                if (clusterChart) {
+                    clusterChart.destroy();
+                }
+
+                const ctx = document.getElementById('clusterChart').getContext('2d');
+                
+                // Separate the data points by cluster for the legend
+                const fastPoints = collectedData.filter(d => d.cluster === 'Fast');
+                const mediumPoints = collectedData.filter(d => d.cluster === 'Medium');
+                const slowPoints = collectedData.filter(d => d.cluster === 'Slow');
+
+                // Plot the cluster centroids separately
+                const fastCentroid = centroids.find(c => c.cluster === 'Fast');
+                const mediumCentroid = centroids.find(c => c.cluster === 'Medium');
+                const slowCentroid = centroids.find(c => c.cluster === 'Slow');
+                
+                const centroidData = [
+                    {x: fastCentroid.x, y: fastCentroid.y, cluster: 'Fast'},
+                    {x: mediumCentroid.x, y: mediumCentroid.y, cluster: 'Medium'},
+                    {x: slowCentroid.x, y: slowCentroid.y, cluster: 'Slow'}
+                ]
+                
+                clusterChart = new Chart(ctx, {
+                    type: 'scatter',
+                    data: {
+                        datasets: [{
+                            label: 'Fast',
+                            data: fastPoints,
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            backgroundColor: pointBackgroundColors['Fast'],
+                        },
+                        {
+                            label: 'Medium',
+                            data: mediumPoints,
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            backgroundColor: pointBackgroundColors['Medium'],
+                        },
+                        {
+                            label: 'Slow',
+                            data: slowPoints,
+                            pointRadius: 6,
+                            pointHoverRadius: 8,
+                            backgroundColor: pointBackgroundColors['Slow'],
+                        },
+                        {
+                            label: 'Centroids',
+                            data: centroidData,
+                            backgroundColor: 'rgba(0,0,0,1)',
+                            pointStyle: 'crossRot',
+                            pointRadius: 10,
+                            pointHoverRadius: 12,
+                            pointBorderColor: 'rgba(0,0,0,1)',
+                            pointBorderWidth: 2,
+                            tooltip: {
+                                callbacks: {
+                                    label: (context) => `Centroid: ${context.raw.x.toFixed(2)}ms, ${context.raw.y.toFixed(2)}`
+                                }
+                            }
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            x: {
+                                title: { display: true, text: 'Response Time (ms)' },
+                                ticks: { display: true },
+                                min: Math.min(...collectedData.map(d => d.x)) - 50,
+                                max: Math.max(...collectedData.map(d => d.x)) + 50
+                            },
+                            y: {
+                                display: true,
+                                title: { display: true, text: 'Jitter' }
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                display: true
+                            }
+                        }
+                    }
+                });
+            }
+
+            // Main function to start monitoring
+            async function startMonitoring() {
+                const url = urlInput.value.trim();
+                const interval = parseInt(intervalInput.value) || 5;
+                const duration = parseInt(durationInput.value) || 120;
+
+                if (!url) {
+                    statusMessage.textContent = 'Please enter a valid URL.';
+                    statusMessage.style.color = 'red';
+                    return;
+                }
+                
+                if (interval < 1) {
+                    statusMessage.textContent = 'Interval must be a positive number.';
+                    statusMessage.style.color = 'red';
+                    return;
+                }
+
+                isMonitoring = true;
+                startBtn.textContent = 'Monitoring...';
+                startBtn.disabled = true;
+                urlInput.disabled = true;
+                intervalInput.disabled = true;
+                durationInput.disabled = true;
+                statusMessage.textContent = `Monitoring started. Pinging every ${interval} seconds for ${duration} seconds...`;
+                statusMessage.style.color = 'gray';
+                realtimeChartContainer.classList.remove('hidden');
+                clusterChartContainer.classList.add('hidden');
+                showClustersBtn.classList.add('hidden');
+
+                if (realtimeChart) {
+                    realtimeChart.destroy();
+                }
+                initRealtimeChart();
+                collectedData = [];
+                
+                // Ping immediately and then every `interval` seconds
+                pingAndCollectData(url);
+                pingInterval = setInterval(() => pingAndCollectData(url), interval * 1000);
+                
+                // Set a timeout to stop monitoring after the duration is over
+                pingDurationTimeout = setTimeout(() => {
+                    stopMonitoringAndAnalyze();
+                }, duration * 1000);
+            }
+            
+            // Ping the URL via the Flask backend and collect data
+            async function pingAndCollectData(url) {
+                try {
+                    const response = await fetch(window.location.origin + '/ping_url', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: url })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok && data.success) {
+                        const response_time = data.response_time;
+                        statusMessage.textContent = `Last Ping: ${response_time.toFixed(2)}ms`;
+                        statusMessage.style.color = 'gray';
+                        
+                        collectedData.push({ response_time: response_time });
+                        updateRealtimeChart({ response_time: response_time });
+
+                    } else {
+                        statusMessage.textContent = `Ping failed: ${data.message || 'Server error'}`;
+                        statusMessage.style.color = 'red';
+                        // Stop monitoring on error
+                        stopMonitoringAndAnalyze(true);
+                    }
+
+                } catch (error) {
+                    statusMessage.textContent = `Network error: ${error.message}`;
+                    statusMessage.style.color = 'red';
+                    console.error('Fetch error:', error);
+                    // Stop monitoring on network error
+                    stopMonitoringAndAnalyze(true);
+                }
+            }
+            
+            // Stop monitoring and trigger analysis
+            function stopMonitoringAndAnalyze(isError = false) {
+                clearInterval(pingInterval);
+                clearTimeout(pingDurationTimeout);
+                isMonitoring = false;
+                startBtn.textContent = 'Start Monitoring';
+                startBtn.disabled = false;
+                urlInput.disabled = false;
+                intervalInput.disabled = false;
+                durationInput.disabled = false;
+                if (!isError) {
+                    statusMessage.textContent = `Data collection complete. Total pings: ${collectedData.length}.`;
+                    showClustersBtn.classList.remove('hidden');
+                }
+            }
+
+            // Show modal with a message
+            function showModal(message) {
+                modalMessage.textContent = message;
+                coldStartModal.classList.remove('hidden');
+            }
+
+            // Event listeners
+            startBtn.addEventListener('click', () => {
+                if (!isMonitoring) {
+                    startMonitoring();
+                } else {
+                    stopMonitoringAndAnalyze();
+                }
+            });
+
+            closeModalBtn.addEventListener('click', () => {
+                coldStartModal.classList.add('hidden');
+            });
+
+            window.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && !coldStartModal.classList.contains('hidden')) {
+                    coldStartModal.classList.add('hidden');
+                }
+            });
+
+            showClustersBtn.addEventListener('click', async () => {
+                // Send the collected data to the backend for analysis
+                const response = await fetch(window.location.origin + '/analyze_data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data: collectedData })
+                });
+
+                const analysisData = await response.json();
+
+                if (response.ok && analysisData.success) {
+                    collectedData = analysisData.results.points;
+                    centroids = analysisData.results.centroids;
+                    
+                    clusterChartContainer.classList.remove('hidden');
+                    initClusterChart();
+                    
+                    const slowCount = collectedData.filter(d => d.cluster === 'Slow').length;
+                    if (slowCount > 0) {
+                        showModal(`The analysis detected ${slowCount} slow response times, which may indicate cold starts.`);
+                    }
+
+                } else {
+                    statusMessage.textContent = `Analysis failed: ${analysisData.message || 'Server error'}`;
+                    statusMessage.style.color = 'red';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
