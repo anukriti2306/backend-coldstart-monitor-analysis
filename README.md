@@ -16,6 +16,9 @@
 <a href="https://ml-mini-project-ehri.onrender.com" target="_blank">
   <img src="https://img.shields.io/badge/%20Deployed-FF4088?style=for-the-badge&logo=render&logoColor=white" alt="Live Demo"/>
 </a>
+<img width="1912" height="946" alt="image" src="https://github.com/user-attachments/assets/68578406-2958-492a-be76-355cfb6b9206" />
+<img width="1911" height="728" alt="image" src="https://github.com/user-attachments/assets/a122ac81-e5c0-438f-827b-bace5f62e8b0" />
+
 
 </div>
 
